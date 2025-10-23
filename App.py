@@ -3,8 +3,14 @@ import random
 import pandas as pd
 import time
 from datetime import datetime
-# Se añade el import para el Canvas de dibujo (puede causar error si no está disponible)
 from streamlit_drawable_canvas import st_canvas 
+
+# --- IMPORTS DE APRENDIZAJE AUTOMÁTICO RESTAURADOS ---
+import tensorflow as tf
+from PIL import Image, ImageOps
+import numpy as np
+# Se omite matplotlib.pyplot ya que no es necesario para la funcionalidad principal.
+# --- FIN IMPORTS RESTAURADOS ---
 
 # --- 1. Mapeo Creativo de Mensajes Estelares ---
 # Mensajes que se usarán en la predicción
@@ -69,8 +75,6 @@ def inject_cosmic_cute_css():
                 transform: translateY(2px);
             }}
 
-            /* ** CSS ELIMINADO: Se quitó el estilo gigante del st.text_input. ** */
-            
             /* Dataframe y Cajas de Información */
             .stDataFrame, .stAlert, .stInfo, .stWarning, .stSuccess {{
                 border-radius: 10px;
@@ -108,42 +112,45 @@ st.set_page_config(
 
 inject_cosmic_cute_css()
 
-# --- 4. Función de SIMULACIÓN (Reemplaza a Keras/TensorFlow) ---
-def simulate_digit_recognition(drawing_data):
-    """
-    Simula la predicción de dígitos.
-    Si hay trazos (se ha dibujado), asigna un dígito aleatorio con alta confianza.
-    Si no hay trazos, retorna None.
-    """
-    if drawing_data is None or drawing_data.shape[2] == 0:
-        return None, None
-        
-    # Contar la cantidad de pixeles no transparentes como un indicador de que "algo" fue dibujado
-    # El canal alpha (índice 3) indica la transparencia. Si es mayor a 0, hay trazo.
-    non_transparent_pixels = (drawing_data[:, :, 3] > 0).sum()
-    
-    if non_transparent_pixels < 50: # Umbral muy bajo para confirmar el dibujo
-        return None, None
+# --- 4. Funciones de Predicción REAL (Restauradas) ---
 
-    # SIMULACIÓN: Asignar un dígito aleatorio
-    predicted_digit = random.randint(0, 9)
-    predicted_digit_str = str(predicted_digit)
+@st.cache_resource
+def load_model():
+    """Carga el modelo de Keras una sola vez, si es posible."""
+    try:
+        # Nota: El archivo 'handwritten.h5' debe existir en la carpeta 'model/'
+        model = tf.keras.models.load_model("model/handwritten.h5")
+        return model
+    except Exception as e:
+        # Captura el error si TensorFlow o el archivo no están disponibles.
+        st.error(f"¡Alerta Estelar! No se pudo cargar el modelo de IA. El archivo 'model/handwritten.h5' o las librerías (TensorFlow/Keras) podrían faltar. Detalles: {e}")
+        return None
+
+def predictDigit(image_data, model):
+    """Procesa la imagen del Canvas y predice el dígito usando el modelo."""
     
-    # Generar probabilidades (simuladas)
-    probabilities = [0.0] * 10 # 10 clases (0-9)
-    probabilities[predicted_digit] = round(random.uniform(0.9, 0.99), 4) # Alta confianza en el "detectado"
+    # 1. Convertir datos del Canvas (RGBA array) a imagen PIL
+    # El código original usaba Image.fromarray(..., 'RGBA')
+    input_image = Image.fromarray(image_data.astype('uint8'),'RGBA')
     
-    remaining_prob = 1.0 - probabilities[predicted_digit]
-    if remaining_prob > 0:
-        small_prob = remaining_prob / 9
-        for i in range(10):
-            if i != predicted_digit:
-                probabilities[i] = round(small_prob * random.uniform(0.5, 1.5), 4)
+    # 2. Preprocesamiento (como en el código original)
+    image = ImageOps.grayscale(input_image)
+    img = image.resize((28,28))
+    img = np.array(img, dtype='float32')
+    img = img/255
     
-    total = sum(probabilities)
-    probabilities = [p / total for p in probabilities]
+    # 3. Preparar para el modelo (reshape: (1, 28, 28, 1) para CNN)
+    img = img.reshape((1, 28, 28, 1))
     
-    return predicted_digit_str, probabilities
+    # 4. Predicción
+    pred = model.predict(img)
+    probabilities_list = pred[0].tolist() # Lista de 10 probabilidades
+    result = np.argmax(pred[0])
+    
+    # 5. Formatear las probabilidades como un diccionario para el DataFrame
+    probabilities_dict = {i: prob for i, prob in enumerate(probabilities_list)}
+
+    return str(result), probabilities_dict
 
 
 # --- 5. Lógica de UI Principal ---
@@ -167,7 +174,7 @@ col_canvas, col_spacer = st.columns([1, 1])
 with col_canvas:
     st.subheader("🌌 Bloc de Polvo Estelar (Dibuja aquí)")
     
-    # Componente Canvas de Dibujo (Restaurado del código original)
+    # Componente Canvas de Dibujo
     canvas_result = st_canvas(
         fill_color="rgba(255, 165, 0, 0.0)",  # Color de relleno de fondo, transparente
         stroke_width=20, # Ancho de línea grueso para mejor visibilidad del dibujo
@@ -181,16 +188,29 @@ with col_canvas:
     
 # Botón de Predicción
 if st.button('Clasificar Constelación'):
-    # Verificar si el canvas tiene datos de imagen (es decir, se ha dibujado)
-    if canvas_result.image_data is not None:
+    # Cargar el modelo
+    model = load_model()
+    
+    if model is None:
+        # El error ya se mostró dentro de load_model
+        st.error("¡Emergencia Cósmica! La clasificación de constelaciones no puede continuar sin el modelo de IA.")
+    elif canvas_result.image_data is not None:
         
         # El canvas retorna un array NumPy RGBA
         input_numpy_array = canvas_result.image_data 
         
-        # Simular la predicción usando los datos del array
-        predicted_digit_str, probabilities = simulate_digit_recognition(input_numpy_array)
+        # Verificar si se ha dibujado algo significativo
+        non_transparent_pixels = (input_numpy_array[:, :, 3] > 0).sum()
         
-        if predicted_digit_str is not None:
+        if non_transparent_pixels < 50:
+            st.error('⚠️ ¡Alerta Estelar! Por favor, dibuja un dígito visible en el Bloc de Polvo Estelar antes de clasificar.')
+        else:
+            # Predicción REAL con la lógica restaurada
+            predicted_digit_str, probabilities_dict = predictDigit(input_numpy_array, model)
+            
+            # Obtener la probabilidad principal para el encabezado
+            main_probability = probabilities_dict.get(int(predicted_digit_str), 0.0)
+            
             # Mostrar animación de clasificación
             with st.spinner(f"Analizando la forma del trazo estelar..."):
                 time.sleep(2) 
@@ -214,15 +234,15 @@ if st.button('Clasificar Constelación'):
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # Mostrar el resultado del header para cumplir con el código original
-                st.header(f'El Dígito es : {predicted_digit_str} (Confianza: {probabilities[int(predicted_digit_str)] * 100:.2f}%)')
+                # Mostrar el resultado del header 
+                st.header(f'El Dígito es : {predicted_digit_str} (Confianza: {main_probability * 100:.2f}%)')
 
 
             with col_res2:
-                st.subheader("📈 Matriz de Confianza (Simulada)")
+                st.subheader("📈 Matriz de Confianza")
                 
                 # Crear DataFrame para mostrar la matriz de probabilidad
-                prob_data = [{"Dígito": i, "Probabilidad (%)": f"{probabilities[i] * 100:.2f}"} for i in range(10)]
+                prob_data = [{"Dígito": i, "Probabilidad (%)": f"{probabilities_dict[i] * 100:.2f}"} for i in range(10)]
                 df_prob = pd.DataFrame(prob_data)
                 
                 # Ordenar por Probabilidad descendente
@@ -232,9 +252,6 @@ if st.button('Clasificar Constelación'):
 
                 st.dataframe(df_prob.set_index('Dígito'), use_container_width=True, height=350)
         
-        else:
-            st.error('⚠️ ¡Alerta Estelar! Por favor, dibuja un dígito en el Bloc de Polvo Estelar antes de clasificar.')
-            
     else:
         st.warning('⚠️ Por favor, dibuja un único dígito (0-9) en el bloc para simular la detección.')
 
@@ -243,11 +260,10 @@ if st.button('Clasificar Constelación'):
 st.sidebar.title("🪐 Bitácora de Vuelo (Acerca de)")
 st.sidebar.markdown("""
 <div style='font-family: "Sniglet", cursive; color: var(--color-text);'>
-    <p>Esta aplicación simula la clasificación de constelaciones (dígitos escritos a mano).</p>
-    <p>La **Interacción Multimodal** se ilustra mediante la entrada de escritura (dibujar con el ratón/dedo).</p>
-    <p>El sistema simula un modelo de Red Neuronal Convolucional (CNN) entrenado con datos MNIST (dígitos).</p>
+    <p>Esta aplicación utiliza un modelo de Red Neuronal Convolucional (CNN) entrenado con datos MNIST (dígitos).</p>
+    <p>La **Interacción Multimodal** se ilustra mediante la entrada de escritura (dibujar con el ratón/dedo) y el posterior procesamiento por la máquina.</p>
     <br>
-    <p>Hecho con amor cósmico.</p>
+    <p>Hecho con amor cósmico. ¡Clasifica una constelación!</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -256,5 +272,5 @@ st.sidebar.markdown("""
 st.markdown("---")
 st.caption("""
 **Acerca de la aplicación (El Crayon Cósmico)**: 
-Esta interfaz es un trabajo de Interfaces Multimodales. Utiliza Streamlit y el componente de dibujo para la entrada de datos, y presenta una **simulación creativa del reconocimiento de dígitos** para ilustrar el concepto de Visión Artificial.
+Esta interfaz es un trabajo de Interfaces Multimodales. Utiliza Streamlit y el componente de dibujo para la entrada de datos, y **ahora emplea el modelo de Aprendizaje Automático original** para realizar la clasificación real de dígitos, ilustrando el concepto de Visión Artificial.
 """)
